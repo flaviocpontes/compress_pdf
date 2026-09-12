@@ -4,6 +4,16 @@ Compress a PDF to a target file size by re-encoding its pages as JPEG
 (downsampling resolution and quality as needed, color preferred over
 grayscale).
 
+## Install (Linux)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/flaviocpontes/compress_pdf/master/install.sh | bash
+```
+
+Downloads the latest release binary and copies it to the first writable
+directory on your `PATH` (creating `~/.local/bin` as a fallback). Install a
+specific version with `VERSION=v1.0.0`. Requires a tagged release to exist.
+
 ## Usage
 
 ```bash
