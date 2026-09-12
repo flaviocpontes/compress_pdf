@@ -18,6 +18,7 @@ jobs:
     # fork PRs have no access to secrets — skip instead of failing
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    environment: main # SONAR_URL (var) and SONAR_TOKEN (secret) live here
     steps:
       - uses: actions/checkout@v4
         with:
@@ -25,4 +26,4 @@ jobs:
       - uses: SonarSource/sonarqube-scan-action@v4
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: ${{ secrets.SONAR_URL }}
+          SONAR_HOST_URL: ${{ vars.SONAR_URL }}
