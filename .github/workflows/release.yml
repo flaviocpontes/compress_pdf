@@ -26,7 +26,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.1.0
       - name: Build binary
         run: uv run pyinstaller --onefile --name compress-pdf-${{ matrix.target }} main.py
       - uses: actions/upload-artifact@v7
