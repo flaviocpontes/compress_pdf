@@ -1,107 +1,78 @@
-import sys
 import os
+import sys
+
 import fitz
 
+# First (dpi, quality, colorspace) whose output fits the target wins.
+# Color is preferred; grayscale is the fallback. Quality alone is not enough:
+# a 300 dpi scan never re-encodes below ~2 MiB, so downsampling is required.
+STEPS = [
+    (dpi, quality, fitz.csRGB)
+    for dpi in (300, 200, 150, 120)
+    for quality in (60, 40, 25)
+] + [
+    (dpi, quality, fitz.csGRAY)
+    for dpi in (200, 150, 120)
+    for quality in (60, 40, 25)
+]
 
-def collect_image_xrefs(doc):
-    xrefs = set()
+
+def build_pdf_bytes(doc, dpi, quality, colorspace):
+    # ponytail: page-render rasterizes everything (text/vector too); fine for
+    # scanned docs, replace with per-image xref handling if text layers matter
+    out = fitz.open()
+    scale = dpi / 72
     for page in doc:
-        for img in page.get_images(full=True):
-            xrefs.add(img[0])
-        for xref in page.xrefs():
-            try:
-                if doc.xref_get_key(xref, "Subtype")[1] == "/XObject":
-                    if doc.xref_get_key(xref, "Subtype")[1] == "/Image":
-                        xrefs.add(xref)
-            except Exception:
-                pass
-    return xrefs
-
-
-def recompress_images(doc, quality):
-    replaced = 0
-    for page in doc:
-        for img_index in page.get_images(full=True):
-            xref = img_index[0]
-            try:
-                img = doc.extract_image(xref)
-                if img["ext"] == "jpeg":
-                    continue
-                pix = fitz.Pixmap(doc, xref)
-                if pix.n > 4:
-                    pix = fitz.Pixmap(fitz.csRGB, pix)
-                jpeg_bytes = pix.tobytes("jpeg", quality=quality)
-                new_pix = fitz.Pixmap(jpeg_bytes)
-                rect = page.get_image_rects(xref)[0]
-                page.replace_image(xref, pixmap=new_pix)
-                replaced += 1
-            except Exception:
-                pass
-    return replaced
-
-
-def save_with_options(doc, path, garbage=3, deflate=True):
-    doc.save(path, garbage=garbage, deflate=deflate)
+        pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), colorspace=colorspace)
+        jpeg = pix.tobytes("jpeg", jpg_quality=quality)
+        new_page = out.new_page(width=page.rect.width, height=page.rect.height)
+        new_page.insert_image(new_page.rect, stream=jpeg)
+    return out.tobytes(garbage=3, deflate=True)
 
 
 def compress_to_target(input_path, output_path, target_mib):
     target_bytes = target_mib * 1024 * 1024
     doc = fitz.open(input_path)
 
-    save_with_options(doc, output_path)
-    if os.path.getsize(output_path) <= target_bytes:
-        print(f"Already within target: {os.path.getsize(output_path) / (1024*1024):.2f} MiB")
-        doc.close()
-        return
+    optimized = doc.tobytes(garbage=3, deflate=True)
+    if len(optimized) <= target_bytes:
+        with open(output_path, "wb") as f:
+            f.write(optimized)
+        print(f"Already within target: {len(optimized) / (1024 * 1024):.2f} MiB")
+        return len(optimized)
 
-    qualities = [95, 85, 75, 65, 55, 45, 35, 25, 15]
-    best_quality = qualities[-1]
-    best_path = output_path
-
-    for quality in qualities:
-        doc_copy = fitz.open(doc.name)
-        recompress_images(doc_copy, quality)
-        temp_path = output_path + f".tmp_q{quality}"
-        save_with_options(doc_copy, temp_path)
-        size = os.path.getsize(temp_path)
-        print(f"  Quality {quality}: {size / (1024*1024):.2f} MiB")
-        doc_copy.close()
-
-        if size <= target_bytes:
-            best_quality = quality
-            best_path = temp_path
+    pdf_bytes = b""
+    for dpi, quality, colorspace in STEPS:
+        pdf_bytes = build_pdf_bytes(doc, dpi, quality, colorspace)
+        mode = "gray" if colorspace is fitz.csGRAY else "color"
+        print(f"  {dpi}dpi {mode} q{quality}: {len(pdf_bytes) / (1024 * 1024):.2f} MiB")
+        if len(pdf_bytes) <= target_bytes:
             break
-        elif size < os.path.getsize(best_path) if os.path.exists(best_path) else True:
-            best_quality = quality
-            best_path = temp_path
 
-    if best_path != output_path:
-        os.replace(best_path, output_path)
-
-    for q in qualities:
-        tmp = output_path + f".tmp_q{q}"
-        if os.path.exists(tmp):
-            os.remove(tmp)
-
-    final_size = os.path.getsize(output_path)
-    print(f"Final: {final_size / (1024*1024):.2f} MiB (quality={best_quality})")
-    doc.close()
+    with open(output_path, "wb") as f:
+        f.write(pdf_bytes)
+    final_mib = len(pdf_bytes) / (1024 * 1024)
+    if len(pdf_bytes) <= target_bytes:
+        print(f"Final: {final_mib:.2f} MiB")
+    else:
+        print(f"Warning: target unreachable, best effort {final_mib:.2f} MiB")
+    return len(pdf_bytes)
 
 
 def main():
     if len(sys.argv) != 4:
         print(f"Usage: {sys.argv[0]} <input.pdf> <output.pdf> <size_in_mib>")
-        sys.exit(1)
+        sys.exit(2)
 
-    input_path = sys.argv[1]
-    output_path = sys.argv[2]
-    target_mib = float(sys.argv[3])
+    input_path, output_path, target_mib = sys.argv[1], sys.argv[2], float(sys.argv[3])
 
     if not os.path.exists(input_path):
         print(f"Error: {input_path} not found")
-        sys.exit(1)
+        sys.exit(2)
 
-    compress_to_target(input_path, output_path, target_mib)
+    final_size = compress_to_target(input_path, output_path, target_mib)
+    if final_size > target_mib * 1024 * 1024:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
