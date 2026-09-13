@@ -21,8 +21,6 @@ jobs:
             target: windows-x86_64
           - os: macos-latest
             target: macos-arm64
-          - os: macos-13 # last Intel runner; remove when GitHub retires it
-            target: macos-x86_64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
